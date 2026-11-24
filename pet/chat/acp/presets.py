@@ -58,12 +58,23 @@ ACP_PRESETS: dict[str, dict[str, Any]] = {
 }
 
 
+def _semver_sort_key(path: Path) -> tuple[int, ...]:
+    raw = path.name.lstrip("vV")
+    parts: list[int] = []
+    for seg in raw.split("."):
+        try:
+            parts.append(int(seg))
+        except ValueError:
+            break
+    return tuple(parts)
+
+
 def _nvm_node_bin_dirs() -> list[str]:
     nvm_root = Path.home() / ".nvm" / "versions" / "node"
     try:
         if not nvm_root.is_dir():
             return []
-        versions = sorted(nvm_root.iterdir(), key=lambda p: p.name, reverse=True)
+        versions = sorted(nvm_root.iterdir(), key=lambda p: (_semver_sort_key(p), p.name), reverse=True)
     except OSError:
         return []
     bins: list[str] = []

@@ -176,7 +176,7 @@ class ChatSettings:
         providers={str(k):ProviderConfig.from_dict(k,v) for k,v in pr.items() if isinstance(v,dict)} or d.providers
         active=str(raw.get('active_provider',next(iter(providers)))); active=active if active in providers else next(iter(providers))
         rw_raw=raw.get('recent_workspaces')
-        recent_workspaces=[str(x).strip() for x in rw_raw if str(x).strip()] if isinstance(rw_raw,list) else []
+        recent_workspaces=[str(x).strip() for x in rw_raw if x is not None and str(x).strip()] if isinstance(rw_raw,list) else []
         return cls(bool(raw.get('enabled',True)),active,str(raw.get('default_system_prompt',d.default_system_prompt)),_safe_int(raw.get('history_message_limit',40),40,lo=1),_safe_int(raw.get('history_char_limit',24000),24000,lo=100),providers,WebSearchSettings.from_dict(raw.get('web_search')),recent_workspaces)
     def to_dict(self,include_secrets=True):
         d={'enabled':self.enabled,'active_provider':self.active_provider,'default_system_prompt':self.default_system_prompt,'history_message_limit':self.history_message_limit,'history_char_limit':self.history_char_limit,'providers':{k:v.to_dict(include_secrets) for k,v in self.providers.items()},'web_search':self.web_search.to_dict(include_secrets)}

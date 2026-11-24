@@ -221,17 +221,20 @@ def test_detect_builtin_acp_providers_win32(monkeypatch):
     assert providers["acp-codex"].acp.startup_timeout == 45.0
 
 
-def test_augmented_env_darwin_preserves_user_and_deduplicates():
+def test_augmented_env_darwin_preserves_user_and_deduplicates(monkeypatch):
+    fake_home = Path("/Users/testuser")
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: fake_home))
+    monkeypatch.setenv("PATH", "/usr/bin:/bin")
     env = augmented_env(
         {"CUSTOM": "1", "PATH": "/my/bin"},
         executable="/opt/homebrew/bin/foo",
         platform_name="darwin",
     )
     assert env["CUSTOM"] == "1"
-    parts = env["PATH"].split(os.pathsep)
+    parts = env["PATH"].split(":")
     assert parts[0] == "/my/bin"
     assert "/opt/homebrew/bin" in parts
     assert "/usr/local/bin" in parts
-    assert str(Path.home() / ".local" / "bin") in parts
+    assert "/Users/testuser/.local/bin" in parts
     # No duplicate PATH entries
     assert len(parts) == len(set(parts))
