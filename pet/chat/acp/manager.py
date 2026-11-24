@@ -71,6 +71,9 @@ class AcpManager:
         key = (str(provider_id), ws)
         fp = _launch_fingerprint(config)
         stale_client: AcpClient | None = None
+        conflict_message = (
+            "ACP client is busy; cannot acquire it with a different launch configuration."
+        )
 
         with self._lock:
             entry = self._clients.get(key)
@@ -78,6 +81,8 @@ class AcpManager:
                 if entry.client.is_alive and entry.fingerprint == fp:
                     entry.config = config
                     return entry.client
+                if entry.busy and entry.client.is_alive:
+                    raise AcpError(conflict_message)
                 if not entry.busy or not entry.client.is_alive:
                     self._clients.pop(key, None)
                     stale_client = entry.client
@@ -92,12 +97,17 @@ class AcpManager:
         client.start()
 
         redundant: AcpClient | None = None
+        conflicting_busy_client = False
         with self._lock:
             existing = self._clients.get(key)
             if existing is not None and existing.client.is_alive and existing.fingerprint == fp:
                 existing.config = config
                 redundant = client
                 result = existing.client
+            elif existing is not None and existing.busy and existing.client.is_alive:
+                redundant = client
+                result = existing.client
+                conflicting_busy_client = True
             else:
                 if existing is not None:
                     redundant = existing.client
@@ -116,6 +126,8 @@ class AcpManager:
             except Exception:
                 log.debug("Failed to close redundant ACP client %s", key, exc_info=True)
 
+        if conflicting_busy_client:
+            raise AcpError(conflict_message)
         return result
 
     def evict(self, provider_id: str, workspace_dir: str) -> None:

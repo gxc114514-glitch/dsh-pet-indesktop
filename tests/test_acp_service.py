@@ -3,13 +3,17 @@ from __future__ import annotations
 import json
 import sys
 import textwrap
+import threading
 import time
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
 from PySide6.QtWidgets import QApplication, QDialog
 
 from pet.chat.acp.manager import AcpManager
+from pet.chat.acp.presets import DEFAULT_ACP_TONE_PROMPT
+from pet.chat.acp.protocol import AcpError
 from pet.chat.acp_provider import AcpProvider
 from pet.chat.lifecycle import release_window_when_idle
 from pet.chat.models import AcpAgentConfig, ChatSession, ProviderConfig
@@ -704,15 +708,93 @@ def test_acp_manager_reap_idle_and_shutdown_all(mock_acp_script: Path, tmp_path:
         manager.shutdown_all()
 
 
+def test_acp_manager_rejects_conflicting_acquire_for_busy_client(
+    mock_acp_script: Path, tmp_path: Path
+):
+    manager = AcpManager()
+    cfg = _make_acp_provider_config(mock_acp_script, tmp_path)
+    key = manager.make_key(cfg.provider_id, str(tmp_path), cfg.acp)
+
+    try:
+        original = manager.acquire(cfg.provider_id, cfg.acp, str(tmp_path))
+        manager.mark_busy(key, True)
+        changed = replace(cfg.acp, args=[*cfg.acp.args, "--changed"])
+
+        with pytest.raises(AcpError, match="busy.*different launch configuration"):
+            manager.acquire(cfg.provider_id, changed, str(tmp_path))
+
+        assert original.is_alive
+        assert manager.acquire(cfg.provider_id, cfg.acp, str(tmp_path)) is original
+    finally:
+        manager.mark_busy(key, False)
+        manager.shutdown_all()
+
+
+def test_racing_conflicting_acquire_preserves_busy_existing_client(
+    mock_acp_script: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    import pet.chat.acp.manager as manager_mod
+
+    manager = AcpManager()
+    cfg = _make_acp_provider_config(mock_acp_script, tmp_path)
+    changed = replace(cfg.acp, args=[*cfg.acp.args, "--racing"])
+    start_entered = threading.Event()
+    release_start = threading.Event()
+    original_client_type = manager_mod.AcpClient
+
+    class _BlockingClient(original_client_type):
+        def start(self):
+            if "--racing" in self._config.args:
+                start_entered.set()
+                assert release_start.wait(timeout=5.0)
+            super().start()
+
+    monkeypatch.setattr(manager_mod, "AcpClient", _BlockingClient)
+    errors: list[BaseException] = []
+
+    def _acquire_changed():
+        try:
+            manager.acquire(cfg.provider_id, changed, str(tmp_path))
+        except BaseException as exc:
+            errors.append(exc)
+
+    worker = threading.Thread(target=_acquire_changed)
+    key = manager.make_key(cfg.provider_id, str(tmp_path), cfg.acp)
+    try:
+        worker.start()
+        assert start_entered.wait(timeout=5.0)
+        original = manager.acquire(cfg.provider_id, cfg.acp, str(tmp_path))
+        manager.mark_busy(key, True)
+
+        release_start.set()
+        worker.join(timeout=8.0)
+        assert not worker.is_alive()
+        assert len(errors) == 1
+        assert isinstance(errors[0], AcpError)
+        assert "busy" in str(errors[0])
+        assert original.is_alive
+        assert manager.acquire(cfg.provider_id, cfg.acp, str(tmp_path)) is original
+    finally:
+        release_start.set()
+        worker.join(timeout=8.0)
+        manager.mark_busy(key, False)
+        manager.shutdown_all()
+
+
 def test_context_reset_and_pet_link_waiting_permission(mock_acp_script: Path, tmp_path: Path):
     app = _get_qapp()
     manager = AcpManager()
     service = ChatService(acp_provider=AcpProvider(manager=manager))
+    log_file = tmp_path / "context-reset-prompts.jsonl"
     cfg = _make_acp_provider_config(
         mock_acp_script,
         tmp_path,
-        env={"MOCK_ACP_LOAD_MODE": "fail"},
-        tone_enabled=False,
+        env={
+            "MOCK_ACP_LOAD_MODE": "fail",
+            "MOCK_ACP_LOG_FILE": str(log_file),
+        },
+        tone_enabled=True,
+        tone_prompt=DEFAULT_ACP_TONE_PROMPT,
     )
     session = ChatSession.create("pet-1", cfg.provider_id, "")
     session.workspace_dir = str(tmp_path)
@@ -731,6 +813,25 @@ def test_context_reset_and_pet_link_waiting_permission(mock_acp_script: Path, tm
         assert resets[0][0] == rid
         assert "已开启新的 Agent 上下文" in resets[0][1]
         assert session.acp_session_id != "stale-session-id"
+
+        eager_session = ChatSession.create("pet-1", cfg.provider_id, "")
+        eager_session.workspace_dir = str(tmp_path)
+        eager_session.acp_session_id = "another-stale-session-id"
+        service.prepare_acp_session(cfg, eager_session)
+        assert _wait_until(app, lambda: len(resets) == 2, timeout=8.0)
+        service.send(
+            [{"role": "user", "content": "resume after prepare"}],
+            cfg,
+            session=eager_session,
+        )
+        assert _wait_until(app, lambda: len(finished) == 2, timeout=8.0)
+
+        prompts = _read_prompt_logs(log_file)
+        assert [entry["text"] for entry in prompts] == [
+            "resume me",
+            "resume after prepare",
+        ]
+        assert all(DEFAULT_ACP_TONE_PROMPT not in entry["text"] for entry in prompts)
     finally:
         service.shutdown()
         manager.shutdown_all()

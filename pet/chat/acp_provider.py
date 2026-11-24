@@ -123,7 +123,7 @@ class AcpProvider:
         meta, is_fresh_new, context_was_reset = client.ensure_session(existing_sid)
         if is_fresh_new:
             meta = self._apply_initial_preferences(client, meta, acp_cfg, session)
-            if mark_pending_tone_if_fresh and meta.session_id:
+            if mark_pending_tone_if_fresh and not context_was_reset and meta.session_id:
                 with self._tone_lock:
                     self._pending_tone_sessions.add((id(client), meta.session_id))
         _sync_session_from_meta(session, meta)
@@ -222,7 +222,7 @@ class AcpProvider:
             with self._tone_lock:
                 was_pending = session_key in self._pending_tone_sessions
                 self._pending_tone_sessions.discard(session_key)
-            need_tone = is_fresh_new or was_pending
+            need_tone = not context_was_reset and (is_fresh_new or was_pending)
 
             tone = (acp_cfg.tone_prompt or "").strip()
             if need_tone and acp_cfg.tone_enabled and tone:
