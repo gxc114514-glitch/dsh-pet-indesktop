@@ -86,7 +86,7 @@ class StdioJsonRpcTransport:
             "stderr": subprocess.PIPE,
             "cwd": self._cwd or None,
             "env": self._env,
-            "bufsize": 0,
+            "bufsize": -1,
         }
         if sys.platform == "win32":
             popen_kwargs["creationflags"] = _CREATE_NO_WINDOW

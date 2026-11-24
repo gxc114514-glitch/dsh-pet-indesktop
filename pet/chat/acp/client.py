@@ -53,6 +53,7 @@ class AcpClient:
             Callable[[AcpPermissionRequest], str | None] | None
         ) = None
         self._active_cancel_event: threading.Event | None = None
+        self._active_send_cancel_once: Callable[[], None] | None = None
         self._turn_cond: threading.Condition | None = None
 
     @property
@@ -343,7 +344,7 @@ class AcpClient:
                 if cancel_sent[0] or turn_done.is_set():
                     return
                 cancel_sent[0] = True
-            self.cancel(session_id)
+                self.cancel(session_id)
 
         with self._turn_lock:
             self._active_session_id = session_id
