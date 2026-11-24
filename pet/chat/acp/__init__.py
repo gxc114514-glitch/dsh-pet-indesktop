@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from .client import AcpClient
+from .manager import AcpManager, get_acp_manager
 from .presets import (
     ACP_PRESETS,
     DEFAULT_ACP_TONE_PROMPT,
@@ -28,6 +29,7 @@ __all__ = [
     "DEFAULT_ACP_TONE_PROMPT",
     "AcpClient",
     "AcpError",
+    "AcpManager",
     "AcpModeOption",
     "AcpModelOption",
     "AcpPermissionOption",
@@ -39,6 +41,7 @@ __all__ = [
     "build_preset_provider",
     "detect_builtin_acp_providers",
     "format_permission_response",
+    "get_acp_manager",
     "parse_permission_request",
     "parse_session_meta",
     "parse_session_update",

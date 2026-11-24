@@ -18,6 +18,9 @@ class PetChatLink:
     def streaming(self, text):
         self._notify('streaming', text[:60])
 
+    def waiting_permission(self, text: str = '需要你确认权限～') -> None:
+        self._notify('waiting_permission', text[:80])
+
     def success(self):
         self._notify('success', '')
 
