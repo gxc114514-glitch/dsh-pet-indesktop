@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import shlex
+import subprocess
+import sys
 
 from PySide6.QtCore import Signal
 from PySide6.QtWidgets import QPlainTextEdit, QPushButton, QVBoxLayout, QWidget
@@ -23,6 +25,16 @@ def _acp_config(value) -> AcpAgentConfig:
     if isinstance(value, AcpAgentConfig):
         return AcpAgentConfig.from_dict(value.to_dict())
     return AcpAgentConfig.from_dict(value if isinstance(value, dict) else {})
+
+
+def _split_args(text: str) -> list[str]:
+    if sys.platform == "win32":
+        args = shlex.split(text, posix=False)
+        return [
+            arg[1:-1] if len(arg) >= 2 and arg[:1] == arg[-1:] == '"' else arg
+            for arg in args
+        ]
+    return shlex.split(text, posix=True)
 
 
 def _parse_env(text: str) -> dict[str, str]:
@@ -157,7 +169,11 @@ class AcpSettingsSection(QWidget):
             if self.acp_preset.currentData() != preset_id:
                 self.acp_preset.setCurrentData("custom")
             self.acp_command.setText(config.command)
-            self.acp_args.setText(shlex.join(config.args))
+            self.acp_args.setText(
+                subprocess.list2cmdline(config.args)
+                if sys.platform == "win32"
+                else shlex.join(config.args)
+            )
             self.acp_env.setPlainText(
                 chr(10).join(f"{key}={value}" for key, value in config.env.items())
             )
@@ -173,7 +189,7 @@ class AcpSettingsSection(QWidget):
 
     def capture_to_draft(self, draft: dict) -> None:
         try:
-            args = shlex.split(self.acp_args.text(), posix=True)
+            args = _split_args(self.acp_args.text())
         except ValueError:
             args = self.acp_args.text().split()
         preset_id = str(self.acp_preset.currentData() or "custom")

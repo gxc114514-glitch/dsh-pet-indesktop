@@ -9,7 +9,7 @@ from __future__ import annotations
 import threading
 from datetime import datetime
 
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import Qt, QTimer, Signal
 from PySide6.QtWidgets import (
     QComboBox,
     QDialog,
@@ -248,12 +248,15 @@ class _AiSettingsPage(QWidget):
                 "选择要编辑/切换的模型服务；保存后当前选中项会作为 active_provider 生效。",
                 provider_row,
             ),
+        ], self))
+        self.provider_kind_section = SettingsSection("Provider 类型", [
             SettingRow(
                 "provider_kind", "Provider 类型",
                 "选择 OpenAI 兼容 HTTP 服务或本机 ACP Coding Agent；切换类型不会丢弃另一套草稿。",
                 self.provider_kind,
             ),
-        ], self))
+        ], self)
+        root.addWidget(self.provider_kind_section)
         model_connection_rows = [
             SettingRow("provider_name", "Provider 名称", "用于区分当前使用的模型服务。", self.name),
             SettingRow("api_url", "API 地址", "OpenAI Chat Completions 兼容服务地址。", self.url),
@@ -392,6 +395,7 @@ class _AiSettingsPage(QWidget):
         self._update_provider_buttons()
         self._update_provider_kind_visibility()
         root.addStretch(1)
+        QTimer.singleShot(0, self, self._mount_integrated_sections)
 
     def appearance_rows(self) -> list[SettingRow]:
         """Controls visually owned by the Appearance page, persisted with AI settings.
@@ -503,11 +507,56 @@ class _AiSettingsPage(QWidget):
         if isinstance(card, SettingsCard):
             card.refresh_separators()
 
+    def _mount_integrated_sections(self) -> None:
+        """Mount controller-owned sections after the host assembles its AI domain."""
+        host = self.parentWidget()
+        domain = host.findChild(QWidget, "settingsDomain_ai") if host else None
+        if domain is None or domain.layout() is None:
+            return
+        layout = domain.layout()
+        changed = False
+        if self.provider_kind_section.parentWidget() is not domain:
+            layout.insertWidget(1, self.provider_kind_section)
+            changed = True
+        if self.acp_section.section.parentWidget() is not domain:
+            layout.insertWidget(2, self.acp_section.section)
+            changed = True
+        self.provider_kind_section.set_description("选择当前服务商使用的连接协议。")
+        self.acp_section.section.set_description("配置本机 Agent 的启动方式与会话语气。")
+        self._update_provider_kind_visibility()
+        mounted_rows = [
+            self.provider_kind_section.rows[0],
+            *self.acp_section.rows,
+        ]
+        search_rows = getattr(host, "_search_rows", None)
+        if search_rows is not None:
+            search_rows.extend(row for row in mounted_rows if row not in search_rows)
+        if changed:
+            page = domain
+            while page is not None and not hasattr(page, "heading_host"):
+                page = page.parentWidget()
+            anchor_bar = (
+                page.findChild(QWidget, "settingsPageAnchors")
+                if page is not None else None
+            )
+            if anchor_bar is not None:
+                anchor_bar.rebuild()
+
+    def _mounted_openai_sections(self) -> set[SettingsSection]:
+        sections = set()
+        for row in self._openai_rows:
+            parent = row.parentWidget()
+            while parent is not None and not isinstance(parent, SettingsSection):
+                parent = parent.parentWidget()
+            if parent is not None:
+                sections.add(parent)
+        return sections
+
     def _update_provider_kind_visibility(self) -> None:
         is_acp = self.provider_kind.currentData() == "acp"
         for row in self._openai_rows:
             row.setVisible(not is_acp)
-        for section in self._openai_sections:
+        for section in self._mounted_openai_sections():
             section.setVisible(not is_acp)
         self.acp_section.set_visible(is_acp)
         if not is_acp:
@@ -688,39 +737,43 @@ class _AiSettingsPage(QWidget):
         new_id = self._new_provider_id()
         new = self._provider_config_type(
             new_id,
-            name=f"{base.name} 副本",
-            base_url=base.base_url,
+            name=f"{current_draft.get('name', base.name)} 副本",
+            base_url=current_draft.get("base_url", base.base_url),
             chat_path=base.chat_path,
-            model=base.model,
+            model=current_draft.get("model", base.model),
             api_key_ref=f"provider/{new_id}",
-            timeout=base.timeout,
-            temperature=base.temperature,
-            max_tokens=base.max_tokens,
-            vision_model=base.vision_model,
-            vision_same_as_chat=base.vision_same_as_chat,
-            vision_base_url=base.vision_base_url,
+            timeout=current_draft.get("timeout", base.timeout),
+            temperature=current_draft.get("temperature", base.temperature),
+            max_tokens=current_draft.get("max_tokens", base.max_tokens),
+            vision_model=current_draft.get("vision_model", base.vision_model),
+            vision_same_as_chat=current_draft.get(
+                "vision_same_as_chat", base.vision_same_as_chat
+            ),
+            vision_base_url=current_draft.get("vision_base_url", base.vision_base_url),
             vision_api_key_ref=f"provider/{new_id}/vision",
-            verify_ssl=base.verify_ssl,
-            thinking=base.thinking,
-            reasoning_effort=base.reasoning_effort,
+            verify_ssl=current_draft.get("verify_ssl", base.verify_ssl),
+            thinking=current_draft.get("thinking", base.thinking),
+            reasoning_effort=current_draft.get(
+                "reasoning_effort", base.reasoning_effort
+            ),
             kind=kind,
-            acp=AcpAgentConfig.from_dict(acp_raw) if kind == "acp" else None,
+            acp=AcpAgentConfig.from_dict(acp_raw),
         )
         self.settings.providers[new_id] = new
         self._provider_drafts[new_id] = {
             "kind": new.kind,
-            "acp": new.acp.to_dict() if new.acp is not None else {},
+            "acp": new.acp.to_dict(),
             "name": new.name,
             "base_url": new.base_url,
             "model": new.model,
-            "key": "",
+            "key": current_draft.get("key", ""),
             "timeout": new.timeout,
             "temperature": new.temperature,
             "max_tokens": new.max_tokens,
             "vision_model": new.vision_model,
             "vision_same_as_chat": new.vision_same_as_chat,
             "vision_base_url": new.vision_base_url,
-            "vision_key": "",
+            "vision_key": current_draft.get("vision_key", ""),
             "verify_ssl": new.verify_ssl,
             "thinking": new.thinking,
             "reasoning_effort": new.reasoning_effort,
