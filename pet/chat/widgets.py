@@ -15,6 +15,7 @@ from PySide6.QtCore import QEvent, QPoint, QRect, QRectF, QSize, Qt, Signal, QTi
 from PySide6.QtGui import QColor, QGuiApplication, QImage, QImageReader, QMouseEvent, QPainter, QPainterPath, QPalette, QPixmap
 from PySide6.QtWidgets import (
     QApplication,
+    QComboBox,
     QDialog,
     QFileDialog,
     QFrame,
@@ -25,6 +26,7 @@ from PySide6.QtWidgets import (
     QListWidget,
     QListWidgetItem,
     QMenu,
+    QMessageBox,
     QPlainTextEdit,
     QPushButton,
     QScrollArea,
@@ -45,6 +47,7 @@ from .memory import ChatMemory, MemoryPayload, memory_payload, parse_remember_co
 from .memory_extract import schedule_extraction
 from .models import ChatMessage
 from .pet_link import PetChatLink
+from .permission_card import ContextResetBanner, PermissionCard
 from .prompt import PromptBuilder, load_character_manifest
 from . import themes as chat_themes
 from .service import ChatService
@@ -194,12 +197,12 @@ class SessionListRow(QFrame):
     action_requested = Signal(str, str)
     selection_requested = Signal(str, bool)
 
-    def __init__(self, session, parent=None):
+    def __init__(self, session, parent=None, *, providers=None):
         super().__init__(parent)
         self.session_id = session.session_id
         self.setObjectName("session-row")
         layout = QHBoxLayout(self)
-        layout.setContentsMargins(10, 0, 4, 0)
+        layout.setContentsMargins(10, 3, 4, 3)
         layout.setSpacing(5)
         self.selector = QToolButton(self)
         self.selector.setObjectName("session-select-button")
@@ -212,10 +215,27 @@ class SessionListRow(QFrame):
         )
         self.selector.hide()
         layout.addWidget(self.selector)
+        text_column = QVBoxLayout()
+        text_column.setContentsMargins(0, 0, 0, 0)
+        text_column.setSpacing(1)
         self.title = QLabel(_short_title(session), self)
         self.title.setObjectName("session-row-title")
         self.title.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
-        layout.addWidget(self.title, 1)
+        text_column.addWidget(self.title)
+        self.subtitle = QLabel(self)
+        self.subtitle.setObjectName("session-row-subtitle")
+        self.subtitle.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+        self.subtitle.setWordWrap(True)
+        provider = (providers or {}).get(session.provider_id)
+        if provider is not None and getattr(provider, "is_acp", False):
+            folder = Path(session.workspace_dir).name if session.workspace_dir else "未选择工作区"
+            self.subtitle.setText(f"{provider.name} · {folder}")
+            self.subtitle.setToolTip(session.workspace_dir)
+            self.setAccessibleDescription(f"ACP Agent {provider.name}，工作区 {session.workspace_dir}")
+        else:
+            self.subtitle.hide()
+        text_column.addWidget(self.subtitle)
+        layout.addLayout(text_column, 1)
         self.more = _chat_tool_button(self, "session-more-button", "more", "会话操作")
         self.more.clicked.connect(self._show_menu)
         self.more.hide()
@@ -1112,11 +1132,15 @@ class ChatWindow(QDialog):
         self.prompt_builder = PromptBuilder(Path(__file__).resolve().parents[2] / "assets" / "characters")
         self.store = SessionStore(config.dir, getattr(config, "instance_id", ""))
         self.session = self._get_session()
+        if self.session.provider_id in self.settings.providers:
+            self.settings.active_provider = self.session.provider_id
         self.service = ChatService(parent=self)
         self.service.memory_extract_hook = self._schedule_memory_extract
         self.pet_link = PetChatLink(pet_window)
         self._bubble: MessageBubble | None = None
         self._bubbles: list[MessageBubble] = []
+        self._permission_cards: dict[str, PermissionCard] = {}
+        self._acp_busy_refresh_pending = False
         # 历史分页状态：未渲染的更早消息条数 / 顶部加载行 / 批量加载守卫
         # （批量期间 _add 不做全量宽度刷新、不排逐条 singleShot）
         self._hidden_count = 0
@@ -1167,6 +1191,7 @@ class ChatWindow(QDialog):
         self._refresh_sessions()
         self._load()
         self._style()
+        self._sync_provider_controls(prepare=True)
         self.set_follow_pet(self.follow_pet, persist=False)
 
     def set_pet_window(self, pet_window=None) -> None:
@@ -1457,6 +1482,66 @@ class ChatWindow(QDialog):
         title_layout.addWidget(self.close_button)
         chat_main_layout.addWidget(self.title_bar)
 
+        self.provider_bar = QFrame(chat_main)
+        self.provider_bar.setObjectName("provider-bar")
+        provider_bar_layout = QHBoxLayout(self.provider_bar)
+        provider_bar_layout.setContentsMargins(20, 7, 20, 7)
+        provider_bar_layout.setSpacing(8)
+        self.provider_combo = QComboBox(self.provider_bar)
+        self.provider_combo.setObjectName("provider-combo")
+        self.provider_combo.setAccessibleName("AI Provider")
+        self.provider_combo.setAccessibleDescription("选择 OpenAI 兼容 API 或本地 ACP Agent")
+        self.provider_combo.setToolTip("选择 AI Provider")
+        self.provider_combo.setMinimumContentsLength(12)
+        for provider_id, provider in self.settings.providers.items():
+            badge = "ACP" if getattr(provider, "is_acp", False) else "API"
+            self.provider_combo.addItem(f"[{badge}] {provider.name}", provider_id)
+            self.provider_combo.setItemData(
+                self.provider_combo.count() - 1,
+                f"{badge} Provider：{provider.name}",
+                Qt.ItemDataRole.ToolTipRole,
+            )
+        provider_bar_layout.addWidget(self.provider_combo, 1)
+        self.acp_mode_combo = QComboBox(self.provider_bar)
+        self.acp_mode_combo.setObjectName("acp-mode-combo")
+        self.acp_mode_combo.setAccessibleName("Agent 运行模式")
+        self.acp_mode_combo.setAccessibleDescription("切换当前 ACP Agent 支持的运行模式")
+        self.acp_mode_combo.setMinimumContentsLength(7)
+        self.acp_mode_combo.hide()
+        provider_bar_layout.addWidget(self.acp_mode_combo)
+        self.acp_model_combo = QComboBox(self.provider_bar)
+        self.acp_model_combo.setObjectName("acp-model-combo")
+        self.acp_model_combo.setAccessibleName("Agent 模型")
+        self.acp_model_combo.setAccessibleDescription("切换当前 ACP Agent 支持的模型")
+        self.acp_model_combo.setMinimumContentsLength(8)
+        self.acp_model_combo.hide()
+        provider_bar_layout.addWidget(self.acp_model_combo)
+        chat_main_layout.addWidget(self.provider_bar)
+
+        self.workspace_bar = QFrame(chat_main)
+        self.workspace_bar.setObjectName("workspace-bar")
+        workspace_layout = QHBoxLayout(self.workspace_bar)
+        workspace_layout.setContentsMargins(20, 6, 20, 8)
+        workspace_layout.setSpacing(8)
+        workspace_caption = QLabel("工作区", self.workspace_bar)
+        workspace_caption.setObjectName("workspace-caption")
+        workspace_layout.addWidget(workspace_caption)
+        self.workspace_combo = QComboBox(self.workspace_bar)
+        self.workspace_combo.setObjectName("workspace-combo")
+        self.workspace_combo.setAccessibleName("ACP 工作区")
+        self.workspace_combo.setAccessibleDescription("选择 Agent 可访问的项目文件夹；更改工作区会开启新的 Agent 上下文")
+        self.workspace_combo.setMinimumContentsLength(18)
+        self.workspace_combo.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        workspace_caption.setBuddy(self.workspace_combo)
+        workspace_layout.addWidget(self.workspace_combo, 1)
+        self.workspace_pick_btn = _chat_tool_button(
+            self.workspace_bar, "workspace-pick-button", "file", "选择 ACP 工作区文件夹"
+        )
+        self.workspace_pick_btn.setAccessibleDescription("打开文件夹选择器并切换 ACP 工作区")
+        workspace_layout.addWidget(self.workspace_pick_btn)
+        self.workspace_bar.hide()
+        chat_main_layout.addWidget(self.workspace_bar)
+
         self.content_top_spacer = QSpacerItem(
             0, 0, QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Expanding
         )
@@ -1556,6 +1641,219 @@ class ChatWindow(QDialog):
         self.service.finished.connect(self._finished)
         self.service.error.connect(self._error)
         self.service.stopped.connect(self._stopped)
+        self.service.permission_requested.connect(self._on_permission_requested)
+        self.service.session_meta_updated.connect(self._on_session_meta_updated)
+        self.service.context_reset.connect(self._on_context_reset)
+        self.provider_combo.activated.connect(self._on_provider_selected)
+        self.acp_mode_combo.activated.connect(self._on_acp_mode_selected)
+        self.acp_model_combo.activated.connect(self._on_acp_model_selected)
+        self.workspace_combo.activated.connect(self._on_workspace_selected)
+        self.workspace_pick_btn.clicked.connect(self._pick_workspace)
+
+    def _persist_chat_settings(self) -> None:
+        self.config.set_chat_settings(self.settings)
+        self.config.save()
+
+    @staticmethod
+    def _select_combo_data(combo: QComboBox, value: str) -> None:
+        index = combo.findData(value)
+        combo.setCurrentIndex(index if index >= 0 else -1)
+
+    def _sync_acp_enabled(self) -> None:
+        busy = self.service.busy
+        self.acp_mode_combo.setEnabled(not busy and self.acp_mode_combo.count() > 0)
+        self.acp_model_combo.setEnabled(not busy and self.acp_model_combo.count() > 0)
+        if busy and not self._acp_busy_refresh_pending:
+            self._acp_busy_refresh_pending = True
+            QTimer.singleShot(50, self, self._refresh_acp_busy_state)
+
+    def _refresh_acp_busy_state(self) -> None:
+        self._acp_busy_refresh_pending = False
+        self._sync_acp_enabled()
+
+    def _sync_provider_controls(self, *, prepare: bool = False) -> None:
+        config = self.settings.active_config
+        is_acp = bool(getattr(config, "is_acp", False))
+        self.provider_combo.blockSignals(True)
+        self._select_combo_data(self.provider_combo, config.provider_id)
+        self.provider_combo.blockSignals(False)
+        provider_text = config.name if is_acp else config.model
+        self.provider_label.setText(provider_text)
+        self.provider_label.setToolTip(provider_text)
+        self.workspace_bar.setVisible(is_acp)
+        if is_acp:
+            self._refresh_workspace_choices()
+            self.workspace_combo.setEnabled(not self.service.busy)
+            self.workspace_pick_btn.setEnabled(not self.service.busy)
+            if prepare:
+                self.service.prepare_acp_session(config, self.session)
+        else:
+            self.acp_mode_combo.clear()
+            self.acp_model_combo.clear()
+            self.acp_mode_combo.hide()
+            self.acp_model_combo.hide()
+        self._sync_acp_enabled()
+
+    def _guard_busy_switch(self) -> bool:
+        if not self.service.busy:
+            return True
+        answer = QMessageBox.question(
+            self,
+            "停止当前回复？",
+            "切换会话或 Agent 前需要停止当前回复。是否停止并继续？",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if answer != QMessageBox.StandardButton.Yes:
+            return False
+        self._active_request_id = None
+        self._cancel_permission_cards()
+        self.service.stop()
+        self._reset()
+        return True
+
+    def _on_provider_selected(self, index: int) -> None:
+        provider_id = str(self.provider_combo.itemData(index) or "")
+        if not provider_id or provider_id == self.settings.active_provider:
+            return
+        if not self._guard_busy_switch():
+            self._select_combo_data(self.provider_combo, self.settings.active_provider)
+            return
+        self.settings.active_provider = provider_id
+        self._persist_chat_settings()
+        if self.session.messages:
+            self.session = self._new_session()
+        else:
+            self.session.provider_id = provider_id
+            self.session.acp_session_id = ""
+            self.session.acp_mode_id = ""
+            self.session.acp_model_id = ""
+            self.store.save(self.session)
+        self._load()
+        self._refresh_sessions()
+        self._reset()
+        self._sync_provider_controls(prepare=True)
+
+    def _on_session_meta_updated(self, session_id: str, meta) -> None:
+        if session_id != self.session.session_id or not self.settings.active_config.is_acp:
+            return
+        self.session.acp_session_id = str(meta.session_id or self.session.acp_session_id)
+        self.session.acp_mode_id = str(meta.current_mode_id or "")
+        self.session.acp_model_id = str(meta.current_model_id or "")
+        for combo, options, id_key, name_key, current in (
+            (self.acp_mode_combo, meta.modes, "mode_id", "name", meta.current_mode_id),
+            (self.acp_model_combo, meta.models, "model_id", "name", meta.current_model_id),
+        ):
+            combo.blockSignals(True)
+            combo.clear()
+            for option in options:
+                option_id = str(getattr(option, id_key))
+                name = str(getattr(option, name_key) or option_id)
+                combo.addItem(name, option_id)
+                description = str(getattr(option, "description", "") or "")
+                if description:
+                    combo.setItemData(combo.count() - 1, description, Qt.ItemDataRole.ToolTipRole)
+            self._select_combo_data(combo, str(current or ""))
+            combo.setVisible(bool(options))
+            combo.blockSignals(False)
+        self._sync_acp_enabled()
+        self.store.save(self.session)
+
+    def _on_acp_mode_selected(self, index: int) -> None:
+        mode_id = str(self.acp_mode_combo.itemData(index) or "")
+        if not mode_id or self.service.busy or not self.settings.active_config.is_acp:
+            return
+        self.session.acp_mode_id = mode_id
+        self.store.save(self.session)
+        self.service.set_acp_mode(self.settings.active_config, self.session, mode_id)
+
+    def _on_acp_model_selected(self, index: int) -> None:
+        model_id = str(self.acp_model_combo.itemData(index) or "")
+        if not model_id or self.service.busy or not self.settings.active_config.is_acp:
+            return
+        self.session.acp_model_id = model_id
+        self.store.save(self.session)
+        self.service.set_acp_model(self.settings.active_config, self.session, model_id)
+
+    def _refresh_workspace_choices(self) -> None:
+        if not self.settings.active_config.is_acp:
+            return
+        current = self.session.workspace_dir
+        if not current and self.settings.active_config.acp is not None:
+            current = self.settings.active_config.acp.default_cwd
+        current = current or str(Path.cwd())
+        paths = list(dict.fromkeys([*self.settings.recent_workspaces, current]))
+        self.workspace_combo.blockSignals(True)
+        self.workspace_combo.clear()
+        for path in paths:
+            self.workspace_combo.addItem(str(path), str(path))
+            self.workspace_combo.setItemData(
+                self.workspace_combo.count() - 1, str(path), Qt.ItemDataRole.ToolTipRole
+            )
+        self._select_combo_data(self.workspace_combo, str(current))
+        self.workspace_combo.blockSignals(False)
+
+    def _on_workspace_selected(self, index: int) -> None:
+        path = str(self.workspace_combo.itemData(index) or "")
+        if path:
+            self._change_workspace(path)
+
+    def _pick_workspace(self) -> None:
+        path = QFileDialog.getExistingDirectory(
+            self, "选择 ACP 工作区", self.session.workspace_dir or str(Path.cwd())
+        )
+        if path:
+            self._change_workspace(path)
+
+    def _change_workspace(self, path: str) -> None:
+        if not self.settings.active_config.is_acp:
+            return
+        workspace = str(Path(path).expanduser().resolve())
+        if not Path(workspace).is_dir() or workspace == self.session.workspace_dir:
+            return
+        if not self._guard_busy_switch():
+            self._refresh_workspace_choices()
+            return
+        if self.session.messages:
+            self.session = self._new_session()
+            self._load()
+        self.session.workspace_dir = workspace
+        self.session.acp_session_id = ""
+        self.session.acp_mode_id = ""
+        self.session.acp_model_id = ""
+        self.settings.record_workspace(workspace)
+        self._persist_chat_settings()
+        self.store.save(self.session)
+        self._refresh_sessions()
+        self._refresh_workspace_choices()
+        self._reset()
+        self.service.prepare_acp_session(self.settings.active_config, self.session)
+
+    def _on_permission_requested(self, request_id: str, request) -> None:
+        if request_id != self._active_request_id:
+            return
+        card = PermissionCard(request, self.timeline_host)
+        self._permission_cards[request.request_id] = card
+        card.decided.connect(self._on_permission_decided)
+        self.message_host_layout.insertWidget(self.message_host_layout.count() - 1, card)
+        self._set_empty_state(False)
+        self.pet_link.waiting_permission()
+        self._bottom(always=True)
+
+    def _on_permission_decided(self, request_id: str, option_id: str) -> None:
+        self._permission_cards.pop(str(request_id), None)
+        self.service.resolve_permission(request_id, option_id)
+
+    def _cancel_permission_cards(self) -> None:
+        for card in list(self._permission_cards.values()):
+            card.mark_resolved("本轮回复已停止", "cancelled")
+        self._permission_cards.clear()
+
+    def _on_context_reset(self, _request_id: str, notice: str) -> None:
+        banner = ContextResetBanner(str(notice), self.timeline_host)
+        self.message_host_layout.insertWidget(self.message_host_layout.count() - 1, banner)
+        self._set_empty_state(False)
+        self._bottom()
 
     def toggle_sidebar(self) -> None:
         if self._compact_layout:
@@ -1828,6 +2126,7 @@ class ChatWindow(QDialog):
             self._delete_layout_item(item)
         self._bubbles.clear()
         self._bubble = None
+        self._permission_cards.clear()
         self._load_earlier_row = None
         self._hidden_count = 0
         self._prepend_anchor = None
@@ -1889,8 +2188,20 @@ class ChatWindow(QDialog):
             return
         empty = self.message_stack.currentWidget() is self.empty_page
         if empty:
+            # Preserve the original title-bar centering while compensating for
+            # optional provider/workspace rows added above the empty prompt.
+            header_height = self.title_bar.sizeHint().height()
+            extra_header_height = self.provider_bar.sizeHint().height()
+            if not self.workspace_bar.isHidden():
+                extra_header_height += self.workspace_bar.sizeHint().height()
+            group_height = 150 + self.composer_card.sizeHint().height()
+            top_space = max(
+                0,
+                (self.chat_main.contentsRect().height() - header_height - group_height) // 2
+                - extra_header_height,
+            )
             self.content_top_spacer.changeSize(
-                0, 0, QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Expanding
+                0, top_space, QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Fixed
             )
             self.content_bottom_spacer.changeSize(
                 0, 0, QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Expanding
@@ -1987,11 +2298,11 @@ class ChatWindow(QDialog):
             item = QListWidgetItem()
             item.setData(Qt.ItemDataRole.UserRole, session.session_id)
             item.setToolTip(session.session_id)
-            item.setSizeHint(QSize(1, 36))
             self.session_list.addItem(item)
             if first_session_row < 0:
                 first_session_row = self.session_list.row(item)
-            row = SessionListRow(session, self.session_list)
+            row = SessionListRow(session, self.session_list, providers=self.settings.providers)
+            item.setSizeHint(QSize(1, 50 if not row.subtitle.isHidden() else 36))
             row.action_requested.connect(self._session_action)
             row.selection_requested.connect(self.set_session_selected)
             row.set_selection_mode(
@@ -2014,7 +2325,10 @@ class ChatWindow(QDialog):
             return
         item = self.session_list.item(index)
         if item is not None and item.data(Qt.ItemDataRole.UserRole):
-            self.select_session(str(item.data(Qt.ItemDataRole.UserRole)))
+            session_id = str(item.data(Qt.ItemDataRole.UserRole))
+            self.select_session(session_id)
+            if self.session.session_id != session_id:
+                self._refresh_sessions()
 
     def _on_session_item_clicked(self, item: QListWidgetItem) -> None:
         if not self._multi_select_mode:
@@ -2094,29 +2408,32 @@ class ChatWindow(QDialog):
         self._refresh_sessions()
 
     def new_session(self) -> None:
-        if self.service.busy:
-            self._active_request_id = None
-            self.service.stop()
+        if not self._guard_busy_switch():
+            return
         self.session = self._new_session()
         self._clear_message_rows()
         self._set_empty_state(True)
         self._refresh_sessions()
         self._reset()
+        self._sync_provider_controls(prepare=True)
 
     def select_session(self, session_id: str) -> None:
         if not session_id or session_id == self.session.session_id:
             return
-        if self.service.busy:
-            self._active_request_id = None
-            self.service.stop()
+        if not self._guard_busy_switch():
+            return
         session = self.store.load(session_id, self.character_id)
         if session is None:
             self._refresh_sessions()
             return
         self.session = session
+        if session.provider_id in self.settings.providers:
+            self.settings.active_provider = session.provider_id
+            self._persist_chat_settings()
         self._load()
         self._refresh_sessions()
         self._reset()
+        self._sync_provider_controls(prepare=True)
 
     def delete_current_session(self) -> None:
         self._delete_sessions((self.session.session_id,))
@@ -2188,11 +2505,14 @@ class ChatWindow(QDialog):
 
     def refresh_settings(self) -> None:
         self.settings = self.config.chat_settings()
-        self.provider_label.setText(self.settings.active_config.model)
-        self.provider_label.setToolTip(self.settings.active_config.model)
+        self.provider_combo.clear()
+        for provider_id, provider in self.settings.providers.items():
+            badge = "ACP" if getattr(provider, "is_acp", False) else "API"
+            self.provider_combo.addItem(f"[{badge}] {provider.name}", provider_id)
         self._apply_character_theme()
         self._style()
         self._refresh_sessions()
+        self._sync_provider_controls(prepare=True)
         desired_pin = bool(self.config.get("chat_always_on_top", False))
         if desired_pin != bool(self.windowFlags() & Qt.WindowType.WindowStaysOnTopHint):
             self.set_chat_always_on_top(desired_pin)
@@ -2202,19 +2522,22 @@ class ChatWindow(QDialog):
     def switch_character(self, character_id: str) -> None:
         if not character_id or character_id == self.character_id:
             return
-        if self.service.busy:
-            self._active_request_id = None
-            self.service.stop()
+        if not self._guard_busy_switch():
+            return
         self.character_id = str(character_id)
         self._apply_character_theme()
         self.session = self._get_session()
+        if self.session.provider_id in self.settings.providers:
+            self.settings.active_provider = self.session.provider_id
         self._refresh_sessions()
         self._load()
         self._style()
         self._reset()
+        self._sync_provider_controls(prepare=True)
 
     def send_message(self) -> None:
         if self.service.busy:
+            self._cancel_permission_cards()
             self.service.stop()
             return
         text = self.input.toPlainText().strip()
@@ -2348,29 +2671,40 @@ class ChatWindow(QDialog):
         # 覆盖窗口是同调用栈内的微秒级，可接受（R3 复审结论：保留）。
         self.store.save(self.session)
         config = self.settings.active_config
-        config.api_key = self.config.resolve_api_key(config)
-        messages = self.prompt_builder.build_messages(
-            self.settings,
-            self.character_id,
-            self.session.messages[:-1],
-            text,
-            memory_payload=self._memory_injection(),
-            # 每宠键：config 可能是 slot 路由视图，必须从 get 逐键读（chat_settings()
-            # 转发主配置，读不到这只宠的场景卡）。
-            roleplay_enabled=bool(self.config.get("roleplay_enabled", False)),
-            roleplay_scene=str(self.config.get("roleplay_scene", "") or ""),
-            roleplay_cast=str(self.config.get("roleplay_cast", "") or ""),
-        )
-        if image_payloads:
-            messages[-1]["content"] = [{"type": "text", "text": text}, *image_payloads]
-        self._last_user_payload = messages[-1].get("content") if image_payloads else None
+        is_acp = bool(getattr(config, "is_acp", False))
+        if is_acp:
+            # ACP owns its durable context and light pet-tone preamble. Do not
+            # inject companionship memory or the full roleplay/system prompt.
+            messages = [{"role": "user", "content": text}]
+            self._last_user_payload = None
+        else:
+            config.api_key = self.config.resolve_api_key(config)
+            messages = self.prompt_builder.build_messages(
+                self.settings,
+                self.character_id,
+                self.session.messages[:-1],
+                text,
+                memory_payload=self._memory_injection(),
+                # 每宠键：config 可能是 slot 路由视图，必须从 get 逐键读（chat_settings()
+                # 转发主配置，读不到这只宠的场景卡）。
+                roleplay_enabled=bool(self.config.get("roleplay_enabled", False)),
+                roleplay_scene=str(self.config.get("roleplay_scene", "") or ""),
+                roleplay_cast=str(self.config.get("roleplay_cast", "") or ""),
+            )
+            if image_payloads:
+                messages[-1]["content"] = [{"type": "text", "text": text}, *image_payloads]
+            self._last_user_payload = messages[-1].get("content") if image_payloads else None
         # request id 必须先落到本窗在途状态再 send：`started` 是在 send() 内
         # **同步**发出的，若沿用 `_active_request_id = send(...)` 的写法，
         # `_started` 拿到的 id 与此刻的 _active_request_id 必然不等，首行过滤
         # 恒命中 → 不进忙态、按钮不变停止、桌宠不切思考态。
         request_id = uuid.uuid4().hex
         self._active_request_id = request_id
-        self.service.send(messages, config, request_id=request_id)
+        self.service.send(
+            messages, config, request_id=request_id, session=self.session if is_acp else None
+        )
+        if is_acp:
+            self.store.save(self.session)
         self._bottom()
 
     def _focus_chat(self) -> None:
@@ -2417,6 +2751,7 @@ class ChatWindow(QDialog):
         self.status.setText("思考中…")
         self.status_dot.setProperty("state", "busy")
         self.composer.set_busy(True)
+        self._sync_acp_enabled()
         if self._bubble:
             self._bubble.set_state("streaming")
         self.pet_link.thinking()
@@ -2529,6 +2864,7 @@ class ChatWindow(QDialog):
             self._bubble.finish_thinking()
             self._bubble.set_content("请求失败：" + str(text), markdown=False)
             self._bubble.set_state("error")
+        self._cancel_permission_cards()
         self._reset()
         self.pet_link.error(text)
         if self._looks_like_authorization_error(text):
@@ -2554,6 +2890,7 @@ class ChatWindow(QDialog):
                 self._bubble.set_state("stopped")
             else:
                 self._remove_bubble(self._bubble)
+        self._cancel_permission_cards()
         self._reset()
 
     def _reset(self) -> None:
@@ -2567,6 +2904,7 @@ class ChatWindow(QDialog):
         self.status.setText("就绪")
         self.status_dot.setProperty("state", "ready")
         self.composer.set_busy(False)
+        self._sync_acp_enabled()
         self._refresh_status_style()
 
     def _refresh_status_style(self) -> None:
@@ -2785,6 +3123,7 @@ class ChatWindow(QDialog):
         if self._pending_finish_text is not None:
             self._complete_finished(self._pending_finish_text)
         self._typewriter_timer.stop()
+        self._cancel_permission_cards()
         self.service.stop()
         self.set_pet_window(None)
         super().done(result)

@@ -143,3 +143,56 @@ QPushButton#load-earlier-button {
     font-size: 12px; padding: 4px 12px;
 }
 QPushButton#load-earlier-button:hover { color: @ACCENT@; }
+
+QLabel#session-row-subtitle { color: #8a93a2; background: transparent; font-size: 10px; }
+QFrame#provider-bar, QFrame#workspace-bar {
+    background: #ffffff; border: none; border-bottom: 1px solid #f0f1f4;
+}
+QComboBox#provider-combo, QComboBox#acp-mode-combo, QComboBox#acp-model-combo,
+QComboBox#workspace-combo {
+    min-height: 28px; padding: 0 8px; border: 1px solid #dfe3e9; border-radius: 7px;
+    background: #ffffff; color: #343a44; selection-background-color: @ACCENT@;
+}
+QComboBox#provider-combo:hover, QComboBox#acp-mode-combo:hover,
+QComboBox#acp-model-combo:hover, QComboBox#workspace-combo:hover { border-color: #bfcce1; }
+QComboBox#provider-combo:focus, QComboBox#acp-mode-combo:focus,
+QComboBox#acp-model-combo:focus, QComboBox#workspace-combo:focus { border: 2px solid @ACCENT@; }
+QComboBox#provider-combo:disabled, QComboBox#acp-mode-combo:disabled,
+QComboBox#acp-model-combo:disabled, QComboBox#workspace-combo:disabled {
+    color: #929aa6; background: #f3f5f8; border-color: #e6e9ee;
+}
+QComboBox QAbstractItemView {
+    color: #252a32; background: #ffffff; border: 1px solid #dfe3e9;
+    selection-background-color: #e4ebfc; selection-color: #252a32; outline: none;
+}
+QLabel#workspace-caption { color: #6f7885; font-size: 11px; }
+QToolButton#workspace-pick-button {
+    width: 28px; height: 28px; border: 1px solid #dfe3e9; border-radius: 7px;
+    background: #ffffff; color: #53606d;
+}
+QToolButton#workspace-pick-button:hover { background: #f0f3f8; border-color: #bfcce1; }
+QToolButton#workspace-pick-button:focus { border: 2px solid @ACCENT@; }
+QToolButton#workspace-pick-button:disabled { color: #a0a6b0; background: #f3f5f8; }
+QFrame#permission-card {
+    background: #fffaf1; border: 1px solid #ead7ad; border-radius: 12px;
+}
+QFrame#permission-card[state="allowed"] { background: #f2f9f5; border-color: #c8e2d2; }
+QFrame#permission-card[state="denied"], QFrame#permission-card[state="cancelled"] {
+    background: #f7f8fa; border-color: #dfe3e9;
+}
+QLabel#permission-title { color: #3b3325; font-weight: 600; background: transparent; }
+QLabel#permission-kind { color: #8b6d32; font-size: 10px; background: transparent; }
+QLabel#permission-detail { color: #625b50; background: transparent; }
+QWidget#permission-options { background: transparent; }
+QPushButton#permission-option {
+    min-height: 28px; padding: 0 12px; border: 1px solid #d8c393; border-radius: 7px;
+    background: #ffffff; color: #4a402e; font-weight: 600;
+}
+QPushButton#permission-option:hover { background: #fff6e5; border-color: #bda269; }
+QPushButton#permission-option:pressed { background: #f4e8ce; }
+QPushButton#permission-option:focus { border: 2px solid @ACCENT@; }
+QPushButton#permission-option:disabled { color: #929aa6; background: #f0f1f3; }
+QLabel#permission-audit { color: #66736c; font-size: 11px; background: transparent; }
+QFrame#context-reset-banner { background: transparent; border: none; }
+QFrame#context-reset-divider { color: #e2e5ea; background: #e2e5ea; border: none; }
+QLabel#context-reset-label { color: #929aa6; font-size: 10px; background: transparent; }
