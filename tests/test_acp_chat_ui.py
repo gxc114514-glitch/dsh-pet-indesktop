@@ -6,7 +6,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
-from PySide6.QtWidgets import QApplication, QMessageBox
+from PySide6.QtWidgets import QApplication, QDialog, QMessageBox
 
 from pet.chat.acp.manager import AcpManager
 from pet.chat.acp.protocol import AcpSessionMeta
@@ -250,3 +250,75 @@ def test_context_reset_inserts_banner(acp_ui):
     banners = _timeline_widgets(window, ContextResetBanner)
     assert len(banners) == 1
     assert "新的 Agent 上下文" in banners[0].text
+
+
+@pytest.mark.parametrize("action", ["delete", "clear"])
+def test_busy_destructive_action_rejection_preserves_turn_and_permission(
+    acp_ui, monkeypatch, action
+):
+    window = acp_ui.window
+    _activate_acp(window)
+    window.input.setPlainText("please ask_permission")
+    window.send_message()
+    assert _wait_until(lambda: bool(_timeline_widgets(window, PermissionCard)))
+    card = _timeline_widgets(window, PermissionCard)[0]
+    session_id = window.session.session_id
+    request_id = window._active_request_id
+    worker = window.service._worker
+
+    monkeypatch.setattr(
+        QMessageBox,
+        "question",
+        staticmethod(lambda *args, **kwargs: QMessageBox.StandardButton.No),
+    )
+    if action == "delete":
+        monkeypatch.setattr(
+            "pet.chat.widgets.DeleteConversationDialog.exec",
+            lambda _dialog: QDialog.DialogCode.Accepted,
+        )
+        assert window._delete_sessions((session_id,)) is False
+    else:
+        window.clear_session()
+
+    assert window.session.session_id == session_id
+    assert window._active_request_id == request_id
+    assert window.service._worker is worker
+    assert window.service.busy
+    assert card.state == "pending"
+    assert card in _timeline_widgets(window, PermissionCard)
+
+
+@pytest.mark.parametrize("action", ["delete", "clear"])
+def test_busy_destructive_action_acceptance_cancels_turn_and_permission(
+    acp_ui, monkeypatch, action
+):
+    window = acp_ui.window
+    _activate_acp(window)
+    window.input.setPlainText("please ask_permission")
+    window.send_message()
+    assert _wait_until(lambda: bool(_timeline_widgets(window, PermissionCard)))
+    card = _timeline_widgets(window, PermissionCard)[0]
+    session_id = window.session.session_id
+
+    monkeypatch.setattr(
+        QMessageBox,
+        "question",
+        staticmethod(lambda *args, **kwargs: QMessageBox.StandardButton.Yes),
+    )
+    if action == "delete":
+        monkeypatch.setattr(
+            "pet.chat.widgets.DeleteConversationDialog.exec",
+            lambda _dialog: QDialog.DialogCode.Accepted,
+        )
+        assert window._delete_sessions((session_id,)) is True
+        assert window.session.session_id != session_id
+        assert window.store.load(session_id, window.character_id) is None
+    else:
+        window.clear_session()
+        assert window.session.session_id == session_id
+        assert window.session.messages == []
+
+    assert card.state == "cancelled"
+    assert not card.audit_label.isHidden()
+    assert window._active_request_id is None
+    assert _wait_until(lambda: not window.service.busy)

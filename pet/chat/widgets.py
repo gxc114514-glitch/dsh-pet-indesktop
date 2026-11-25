@@ -1925,6 +1925,7 @@ class ChatWindow(QDialog):
                 stylesheet += chat_themes.build_modern_custom_overlay_qss(
                     self.accent_color,
                     self.config.get("modern_chat_card_opacity", 84),
+                    dark=bool(overlay_theme.get("dark")),
                 )
             else:
                 self.accent_color = self._base_accent
@@ -2455,9 +2456,8 @@ class ChatWindow(QDialog):
 
         deleting_ids = {session.session_id for session in sessions}
         current_deleted = self.session.session_id in deleting_ids
-        if current_deleted and self.service.busy:
-            self._active_request_id = None
-            self.service.stop()
+        if current_deleted and not self._guard_busy_switch():
+            return False
         for session in sessions:
             self.store.delete(session)
         if current_deleted:
@@ -2475,9 +2475,8 @@ class ChatWindow(QDialog):
         return True
 
     def clear_session(self) -> None:
-        if self.service.busy:
-            self._active_request_id = None
-            self.service.stop()
+        if not self._guard_busy_switch():
+            return
         self.store.clear(self.session)
         self._clear_message_rows()
         self._set_empty_state(True)

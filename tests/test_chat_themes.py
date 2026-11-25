@@ -33,6 +33,36 @@ def test_overlay_matches_dark_mode():
     assert dark['accent'] in build_overlay_qss(dark)  # accent 注入模板
 
 
+def test_modern_dark_overlay_covers_acp_controls_and_permission_states():
+    qss = build_modern_custom_overlay_qss('#3994ff', dark=True)
+    selectors = (
+        'QFrame#provider-bar, QFrame#workspace-bar',
+        'QComboBox#provider-combo:hover',
+        'QComboBox#provider-combo:focus',
+        'QComboBox#provider-combo:disabled',
+        'QComboBox QAbstractItemView',
+        'QToolButton#workspace-pick-button:hover',
+        'QToolButton#workspace-pick-button:focus',
+        'QToolButton#workspace-pick-button:disabled',
+        'QFrame#permission-card[state="allowed"]',
+        'QFrame#permission-card[state="denied"]',
+        'QPushButton#permission-option:hover',
+        'QPushButton#permission-option:pressed',
+        'QPushButton#permission-option:focus',
+        'QPushButton#permission-option:disabled',
+        'QLabel#permission-title',
+        'QLabel#permission-audit',
+        'QFrame#context-reset-divider',
+    )
+    for selector in selectors:
+        assert selector in qss, selector
+    light_colors = {
+        '#ffffff', '#fffaf1', '#f2f9f5', '#f7f8fa', '#f3f5f8',
+        '#343a44', '#252a32', '#3b3325', '#625b50', '#4a402e',
+    }
+    assert not light_colors.intersection(re.findall(r'#[0-9a-fA-F]{6}', qss))
+
+
 def test_modern_custom_background_uses_readable_message_cards_without_hiding_image():
     qss = build_modern_custom_overlay_qss('#3994ff')
     assert 'QFrame#message-bubble { background: transparent;' in qss

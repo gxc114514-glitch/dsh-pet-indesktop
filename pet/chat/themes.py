@@ -203,10 +203,12 @@ def build_overlay_qss(theme: dict) -> str:
                .replace('{title1}', _mix_white(base, 0.48)))
 
 
-def build_modern_custom_overlay_qss(accent: str, card_opacity: int = 84) -> str:
+def build_modern_custom_overlay_qss(
+    accent: str, card_opacity: int = 84, *, dark: bool = False,
+) -> str:
     """Make the modern workspace surfaces translucent over a custom image."""
     alpha = round(255 * max(10, min(100, int(card_opacity))) / 100)
-    return f"""
+    qss = f"""
 QFrame#phone-shell, QFrame#chat-main {{ background: transparent; }}
 QFrame#deepseek-sidebar {{ background: rgba(248, 250, 253, 218); }}
 QFrame#chat-main-header {{ background: rgba(255, 255, 255, 218); }}
@@ -228,6 +230,64 @@ QFrame#message-surface[state="error"] {{
     background: rgba(255, 239, 237, {alpha});
 }}
 QFrame#chat-composer {{ background: rgba(255, 255, 255, 232); border-color: {accent}; }}
+"""
+    if not dark:
+        return qss
+    return qss + f"""
+QFrame#provider-bar, QFrame#workspace-bar {{
+    background: #202024; border-bottom-color: #33333a;
+}}
+QComboBox#provider-combo, QComboBox#acp-mode-combo, QComboBox#acp-model-combo,
+QComboBox#workspace-combo {{
+    background: #2a2a30; color: #e0e0e6; border-color: #3a3a42;
+}}
+QComboBox#provider-combo:hover, QComboBox#acp-mode-combo:hover,
+QComboBox#acp-model-combo:hover, QComboBox#workspace-combo:hover {{
+    background: #303036; border-color: #596273;
+}}
+QComboBox#provider-combo:focus, QComboBox#acp-mode-combo:focus,
+QComboBox#acp-model-combo:focus, QComboBox#workspace-combo:focus {{
+    background: #2a2a30; border-color: {accent};
+}}
+QComboBox#provider-combo:disabled, QComboBox#acp-mode-combo:disabled,
+QComboBox#acp-model-combo:disabled, QComboBox#workspace-combo:disabled {{
+    color: #858590; background: #26262b; border-color: #33333a;
+}}
+QComboBox QAbstractItemView {{
+    color: #e0e0e6; background: #2a2a30; border-color: #3a3a42;
+    selection-background-color: #3a3a46; selection-color: #f0f0f5;
+}}
+QLabel#workspace-caption {{ color: #9a9aa3; }}
+QToolButton#workspace-pick-button {{
+    background: #2a2a30; color: #c5c5cf; border-color: #3a3a42;
+}}
+QToolButton#workspace-pick-button:hover {{
+    background: #303036; border-color: #596273;
+}}
+QToolButton#workspace-pick-button:focus {{ border-color: {accent}; }}
+QToolButton#workspace-pick-button:disabled {{
+    color: #858590; background: #26262b; border-color: #33333a;
+}}
+QFrame#permission-card {{ background: #332f25; border-color: #665b3d; }}
+QFrame#permission-card[state="allowed"] {{ background: #26352d; border-color: #3f624c; }}
+QFrame#permission-card[state="denied"], QFrame#permission-card[state="cancelled"] {{
+    background: #2a2a30; border-color: #3a3a42;
+}}
+QLabel#permission-title {{ color: #f0e8d5; }}
+QLabel#permission-kind {{ color: #d4b978; }}
+QLabel#permission-detail {{ color: #c9c2b5; }}
+QPushButton#permission-option {{
+    background: #383429; color: #eee4cf; border-color: #756643;
+}}
+QPushButton#permission-option:hover {{ background: #45402f; border-color: #a18c57; }}
+QPushButton#permission-option:pressed {{ background: #514831; }}
+QPushButton#permission-option:focus {{ border-color: {accent}; }}
+QPushButton#permission-option:disabled {{
+    color: #858590; background: #2a2a30; border-color: #3a3a42;
+}}
+QLabel#permission-audit {{ color: #a9b8ae; }}
+QFrame#context-reset-divider {{ color: #33333a; background: #33333a; }}
+QLabel#context-reset-label {{ color: #9a9aa3; }}
 """
 
 
