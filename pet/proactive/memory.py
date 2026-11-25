@@ -221,8 +221,13 @@ class ProactiveMemory:
         lock_timeout_ms 的跨进程锁，读若拿宽锁，GUI 主线程的 latest() 就被拖住。
         """
         try:
+            # Explicit stat preserves probe errors on Python 3.15, where
+            # is_file() may collapse them to False.
+            self.path.stat()
             if not self.path.is_file():
                 return []
+        except (FileNotFoundError, NotADirectoryError):
+            return []
         except OSError as exc:
             # 探测失败（stat 报 EACCES/EIO/WinError 5/32…）不是"没有记忆"，
             # 而是"读不到"：归 None，让 record 放弃本次修改、纯读降级。
@@ -386,8 +391,13 @@ class ProactiveMemory:
         ENOENT/ENOTDIR/EBADF/ELOOP）。
         """
         try:
+            # Python 3.15 is_file() may collapse permission/I/O errors to False;
+            # stat() keeps "absent" distinct from "existence unknown".
+            self.path.stat()
             if not self.path.is_file():
                 return True
+        except (FileNotFoundError, NotADirectoryError):
+            return True
         except OSError as exc:
             log.warning("主动陪伴记忆清空失败（存在性探测失败）: %s (%s)", self.path, exc)
             return False

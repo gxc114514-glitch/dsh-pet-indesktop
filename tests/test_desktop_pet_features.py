@@ -2350,7 +2350,8 @@ def test_representative_animation_image_is_cached_on_pet(monkeypatch):
 
 
 def test_representative_animation_decode_is_shared_across_pets(monkeypatch, tmp_path):
-    from concurrent.futures import ThreadPoolExecutor
+    # Python 3.15 may expose a lazy_import proxy through the package attribute.
+    from concurrent.futures.thread import ThreadPoolExecutor
 
     from PySide6.QtGui import QImage
 
