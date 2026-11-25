@@ -27,13 +27,53 @@ def _acp_config(value) -> AcpAgentConfig:
     return AcpAgentConfig.from_dict(value if isinstance(value, dict) else {})
 
 
+def _split_windows_args(text: str) -> list[str]:
+    """Split arguments using the Microsoft C runtime backslash/quote rules."""
+    args = []
+    current = []
+    in_quotes = False
+    argument_started = False
+    index = 0
+    while index < len(text):
+        char = text[index]
+        if char in " \t" and not in_quotes:
+            if argument_started:
+                args.append("".join(current))
+                current = []
+                argument_started = False
+            index += 1
+            continue
+        if char == "\\":
+            end = index
+            while end < len(text) and text[end] == "\\":
+                end += 1
+            backslash_count = end - index
+            if end < len(text) and text[end] == '"':
+                current.append("\\" * (backslash_count // 2))
+                if backslash_count % 2:
+                    current.append('"')
+                else:
+                    in_quotes = not in_quotes
+                index = end + 1
+            else:
+                current.append("\\" * backslash_count)
+                index = end
+            argument_started = True
+            continue
+        if char == '"':
+            in_quotes = not in_quotes
+        else:
+            current.append(char)
+        argument_started = True
+        index += 1
+    if argument_started:
+        args.append("".join(current))
+    return args
+
+
 def _split_args(text: str) -> list[str]:
     if sys.platform == "win32":
-        args = shlex.split(text, posix=False)
-        return [
-            arg[1:-1] if len(arg) >= 2 and arg[:1] == arg[-1:] == '"' else arg
-            for arg in args
-        ]
+        return _split_windows_args(text)
     return shlex.split(text, posix=True)
 
 

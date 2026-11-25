@@ -2,6 +2,7 @@
 """ACP provider editing in the modern AI settings page."""
 from __future__ import annotations
 
+import subprocess
 import sys
 import textwrap
 from pathlib import Path
@@ -502,5 +503,32 @@ def test_argument_parsing_respects_platform_without_losing_paths(
         page.provider_kind.setCurrentData("acp")
         page.acp_section.acp_args.setText(text)
         assert page.provisional_config().acp.args == expected
+    finally:
+        _close(page, qapp)
+
+
+@pytest.mark.parametrize(
+    "args",
+    [
+        ["C:\\Program Files\\Agent\\"],
+        ["say", '"hello"'],
+        [""],
+        ["C:\\dir\\\\", 'a\\\\"b'],
+        ["C:\\tools\\agent.exe", "--profile", "acp"],
+        ["plain", "two words"],
+        [],
+    ],
+)
+def test_windows_argument_editor_round_trips_list2cmdline(
+    args, tmp_path, qapp, monkeypatch
+):
+    """Non-CRT Windows parsing corrupts quoted slashes, quotes, and empty args."""
+    monkeypatch.setattr(sys, "platform", "win32")
+    page = _page(tmp_path)
+    try:
+        page.provider_kind.setCurrentData("acp")
+        page.acp_section.load_from_draft({"acp": {"args": args}})
+        assert page.acp_section.acp_args.text() == subprocess.list2cmdline(args)
+        assert page.provisional_config().acp.args == args
     finally:
         _close(page, qapp)
