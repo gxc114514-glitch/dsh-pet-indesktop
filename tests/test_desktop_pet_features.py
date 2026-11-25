@@ -2777,6 +2777,11 @@ def test_product_copy_has_no_external_brand_reference():
                 path.name in {"test_agent_link.py"}
                 or path.as_posix().endswith("pet/agent_link/__init__.py")
                 or path.name.endswith("-RESEARCH.md")
+                # ACP explicitly supports this agent as a user-selected provider.
+                or path.as_posix().endswith("pet/chat/acp/presets.py")
+                or path.name == "test_acp_models_presets.py"
+                # Feature specs/plans are design evidence, not product copy.
+                or "docs/superpowers/" in path.as_posix()
                 # Contributor/change reports are repository evidence, not
                 # user-facing product copy and may mention external brands.
                 or path.name.startswith("README-CHANGE-")

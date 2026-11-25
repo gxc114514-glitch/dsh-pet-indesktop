@@ -205,6 +205,12 @@ jobs:
           DSPET_TEST_DIAG_DIR: ${{ runner.temp }}/dspet-pytest-diag-linux-prefix
         run: >-
           python -m pytest --capture=tee-sys -vv
+          tests/test_acp_chat_ui.py
+          tests/test_acp_client.py
+          tests/test_acp_models_presets.py
+          tests/test_acp_packaging.py
+          tests/test_acp_service.py
+          tests/test_acp_settings_ui.py
           tests/test_agent_cost.py
           tests/test_agent_event_protocol.py
           tests/test_agent_link.py
