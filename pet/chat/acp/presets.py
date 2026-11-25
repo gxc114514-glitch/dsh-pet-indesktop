@@ -192,6 +192,8 @@ def _darwin_dsh_bundled_node() -> str:
         / "dsh-plugin-desktop-primary-runtime"
         / "dependencies"
         / "node"
+        / "bin"
+        / "node"
     )
 
 

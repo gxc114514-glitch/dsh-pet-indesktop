@@ -163,6 +163,8 @@ def test_detect_builtin_acp_providers_darwin_bundled_and_fallback(monkeypatch):
         / "dsh-plugin-desktop-primary-runtime"
         / "dependencies"
         / "node"
+        / "bin"
+        / "node"
     )
     dsh_bin = "/Applications/DSH Desktop.app/Contents/Resources/app/node_modules/@deepseek-ai/dsh/lib/bin.js"
     factory_bin = "/Applications/Factory.app/Contents/Resources/bin/droid"
