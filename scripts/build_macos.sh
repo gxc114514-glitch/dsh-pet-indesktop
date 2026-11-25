@@ -109,6 +109,19 @@ done
 #    报"起不了工作进程"。
 RAPIDOCR_HIDDEN=(--hidden-import pet.screen_capture.ocr --hidden-import pet.screen_capture.ocr_worker)
 
+# ACP 的运行期模块与动态加载入口只进 chat 变体。
+ACP_HIDDEN=(
+    --hidden-import pet.chat.acp
+    --hidden-import pet.chat.acp.client
+    --hidden-import pet.chat.acp.manager
+    --hidden-import pet.chat.acp.presets
+    --hidden-import pet.chat.acp.protocol
+    --hidden-import pet.chat.acp.transport
+    --hidden-import pet.chat.acp_provider
+    --hidden-import pet.chat.permission_card
+    --hidden-import pet.chat.acp_settings_section
+)
+
 for variant in "${variant_list[@]}"; do
     case "$variant" in
         webm-chat)  entry="packaging/pet_entry.py";            assets="assets/characters";       excludes="" ;;
@@ -168,6 +181,7 @@ for variant in "${variant_list[@]}"; do
     if [[ "$name" == *-chat ]]; then
         args+=(--add-data "pet/chat/legacy_styles.qss:pet/chat")
         args+=(--add-data "pet/chat/modern_styles.qss:pet/chat")
+        args+=("${ACP_HIDDEN[@]}")
     fi
     if [[ -n "$excludes" ]]; then
         IFS=',' read -ra exclude_modules <<< "$excludes"

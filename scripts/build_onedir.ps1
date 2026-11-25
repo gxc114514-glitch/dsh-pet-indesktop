@@ -237,6 +237,20 @@ $chatData = if ($noChat) { @() } else {
         '--add-data', 'pet\chat\modern_styles.qss;pet\chat'
     )
 }
+# ACP runtime modules and dynamically loaded entry points belong only to chat variants.
+$acpHidden = if ($noChat) { @() } else {
+    @(
+        '--hidden-import', 'pet.chat.acp',
+        '--hidden-import', 'pet.chat.acp.client',
+        '--hidden-import', 'pet.chat.acp.manager',
+        '--hidden-import', 'pet.chat.acp.presets',
+        '--hidden-import', 'pet.chat.acp.protocol',
+        '--hidden-import', 'pet.chat.acp.transport',
+        '--hidden-import', 'pet.chat.acp_provider',
+        '--hidden-import', 'pet.chat.permission_card',
+        '--hidden-import', 'pet.chat.acp_settings_section'
+    )
+}
 # GIF variants: generate GIF assets from webm first (auto when missing, -Gif forces regen)
 if ($isGif -and -not $Gif -and -not (Test-Path 'assets\characters_gif')) {
     $Gif = $true
@@ -401,6 +415,7 @@ if (-not $SkipBuild) {
         --add-data "resources\presentmon;resources\presentmon" `
         @rapidocrData `
         @rapidocrHidden `
+        @acpHidden `
         @excludes `
         $entry
     if ($LASTEXITCODE -ne 0) { throw "PyInstaller failed: $LASTEXITCODE" }
