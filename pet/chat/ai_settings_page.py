@@ -39,8 +39,10 @@ from ..settings_widgets import (
     SettingRow,
     SettingsCard,
 )
+from .acp_settings_section import AcpSettingsSection
 from .memory import LAYERS, ChatMemory, layer_of, memory_path
 from .memory_recall import LAYER_LABELS, is_archived
+from .models import AcpAgentConfig
 from .themes import CHAT_UI_STYLE_LABELS, CHAT_UI_VIEW_ASPECT, theme_names
 from .utils import _safe_emit
 
@@ -75,6 +77,14 @@ class _AiSettingsPage(QWidget):
         for pid, provider_item in self.settings.providers.items():
             self.provider_combo.addItem(self._provider_label(provider_item), pid)
         self.provider_combo.setCurrentData(self.settings.active_provider)
+        self.provider_kind = ModernSelect(self, width=230)
+        self.provider_kind.addItem("OpenAI 兼容 API", "openai")
+        self.provider_kind.addItem("ACP Coding Agent", "acp")
+        self.provider_kind.setCurrentData(provider.kind)
+        self.acp_section = AcpSettingsSection(self)
+        self.acp_section.load_from_draft({
+            "acp": provider.acp.to_dict() if provider.acp is not None else {},
+        })
 
         self.name = _line_edit(provider.name)
         self.url = _line_edit(provider.base_url)
@@ -238,15 +248,24 @@ class _AiSettingsPage(QWidget):
                 "选择要编辑/切换的模型服务；保存后当前选中项会作为 active_provider 生效。",
                 provider_row,
             ),
+            SettingRow(
+                "provider_kind", "Provider 类型",
+                "选择 OpenAI 兼容 HTTP 服务或本机 ACP Coding Agent；切换类型不会丢弃另一套草稿。",
+                self.provider_kind,
+            ),
         ], self))
-        root.addWidget(SettingsSection("模型与连接", [
+        model_connection_rows = [
             SettingRow("provider_name", "Provider 名称", "用于区分当前使用的模型服务。", self.name),
             SettingRow("api_url", "API 地址", "OpenAI Chat Completions 兼容服务地址。", self.url),
             SettingRow("model", "模型", "发送请求时使用的模型标识。", self.model),
             SettingRow("api_key", "API Key", "凭据优先保存到系统钥匙串。", self.key),
             SettingRow("system_prompt", "System Prompt", "定义桌宠对话时的身份、语气和行为。", self.prompt, stacked=True),
             SettingRow("connection_test", "连接测试", self.test_result.text(), self.test_button),
-        ], self))
+        ]
+        root.addWidget(SettingsSection("模型与连接", model_connection_rows, self))
+        root.addWidget(self.acp_section)
+        self._openai_rows = model_connection_rows[1:4]
+        self._openai_sections = []
         root.addWidget(SettingsSection("场景扮演", [
             SettingRow(
                 "roleplay_enabled", "场景扮演",
@@ -283,7 +302,10 @@ class _AiSettingsPage(QWidget):
             SettingRow("web_search_max_results", "每次搜索结果数", "单次搜索交给模型的结果条数。", self.web_search_results),
             SettingRow("web_search_fetch_pages", "允许阅读网页正文", "搜索摘要不够时，允许模型打开网页读取正文（更准，但更慢）。", self.web_search_fetch),
         ]
-        root.addWidget(SettingsSection("深度思考与联网", thinking_web_rows, self))
+        thinking_web_section = SettingsSection("深度思考与联网", thinking_web_rows, self)
+        root.addWidget(thinking_web_section)
+        self._openai_rows.extend(thinking_web_rows)
+        self._openai_sections.append(thinking_web_section)
         self._reasoning_effort_row = thinking_web_rows[1]
         self._web_detail_rows = thinking_web_rows[3:]
         self._web_key_row = thinking_web_rows[4]
@@ -340,7 +362,10 @@ class _AiSettingsPage(QWidget):
             SettingRow("vision_url", "视觉 API 地址", "留空复用聊天服务地址。", self.vision_url, parent=self),
             SettingRow("vision_key", "视觉 API Key", "留空复用聊天服务凭据。", self.vision_key, parent=self),
         ]
-        root.addWidget(SettingsSection("视觉能力", vision_rows, self))
+        vision_section = SettingsSection("视觉能力", vision_rows, self)
+        root.addWidget(vision_section)
+        self._openai_rows.extend(vision_rows)
+        self._openai_sections.append(vision_section)
         self._vision_override_rows = vision_rows[1:]
         self.vision_same.toggled.connect(self._update_vision_visibility)
         self._update_vision_visibility(self.vision_same.isChecked())
@@ -349,16 +374,23 @@ class _AiSettingsPage(QWidget):
         self._test_row = self.findChild(SettingRow, "settingRow_connection_test")
         if self._test_row is not None:
             self.test_result = self._test_row.hint_label
-        root.addWidget(SettingsSection("生成参数（高级）", [
+        generation_rows = [
             SettingRow("timeout", "请求超时", "等待模型服务响应的最长时间。", self.timeout),
             SettingRow("temperature", "Temperature", "数值越高，回答越随机。", self.temperature),
             SettingRow("max_tokens", "最大输出 Token", "限制模型单次回复的最大长度；开启深度思考时思考过程也计入，建议 8192 以上。", self.tokens),
             SettingRow("skip_ssl", "跳过 SSL 证书验证", "仅用于本地网关或自签名证书。", self.skip_ssl),
-        ], self, advanced=True))
+        ]
+        generation_section = SettingsSection("生成参数（高级）", generation_rows, self, advanced=True)
+        root.addWidget(generation_section)
+        self._openai_rows.extend(generation_rows)
+        self._openai_sections.append(generation_section)
+        self.provider_kind.currentIndexChanged.connect(self._on_provider_kind_changed)
+        self.acp_section.auto_detect_requested.connect(self._auto_detect_acp_providers)
         self.provider_combo.currentIndexChanged.connect(self._on_provider_changed)
         self.add_provider_btn.clicked.connect(self._add_provider)
         self.delete_provider_btn.clicked.connect(self._delete_provider)
         self._update_provider_buttons()
+        self._update_provider_kind_visibility()
         root.addStretch(1)
 
     def appearance_rows(self) -> list[SettingRow]:
@@ -453,8 +485,9 @@ class _AiSettingsPage(QWidget):
         self._populate_background_options(self._background_style)
 
     def _update_thinking_web_visibility(self, *_args) -> None:
-        self._reasoning_effort_row.setVisible(self.thinking_mode.currentData() == "enabled")
-        web_on = self.web_search_enabled.isChecked()
+        openai = self.provider_kind.currentData() != "acp"
+        self._reasoning_effort_row.setVisible(openai and self.thinking_mode.currentData() == "enabled")
+        web_on = openai and self.web_search_enabled.isChecked()
         for row in self._web_detail_rows:
             row.setVisible(web_on)
         self._web_key_row.setVisible(web_on and self.web_search_engine.currentData() in self._web_keyed_engines)
@@ -463,11 +496,33 @@ class _AiSettingsPage(QWidget):
             card.refresh_separators()
 
     def _update_vision_visibility(self, reuse_chat_model: bool) -> None:
+        openai = self.provider_kind.currentData() != "acp"
         for row in self._vision_override_rows:
-            row.setVisible(not reuse_chat_model)
+            row.setVisible(openai and not reuse_chat_model)
         card = self._vision_override_rows[0].parentWidget() if self._vision_override_rows else None
         if isinstance(card, SettingsCard):
             card.refresh_separators()
+
+    def _update_provider_kind_visibility(self) -> None:
+        is_acp = self.provider_kind.currentData() == "acp"
+        for row in self._openai_rows:
+            row.setVisible(not is_acp)
+        for section in self._openai_sections:
+            section.setVisible(not is_acp)
+        self.acp_section.set_visible(is_acp)
+        if not is_acp:
+            self._update_thinking_web_visibility()
+            self._update_vision_visibility(self.vision_same.isChecked())
+        for row in self._openai_rows:
+            card = row.parentWidget()
+            if isinstance(card, SettingsCard):
+                card.refresh_separators()
+
+    def _on_provider_kind_changed(self, _index: int = -1) -> None:
+        if self._loading_provider:
+            return
+        self._capture_current_draft()
+        self._update_provider_kind_visibility()
 
     def _background_style_label(self) -> str:
         """当前对话窗口风格的展示名（裁切行标签、编辑器标题共用）。"""
@@ -535,6 +590,8 @@ class _AiSettingsPage(QWidget):
     @staticmethod
     def _provider_label(p) -> str:
         name = str(p.name or p.provider_id)
+        if p.is_acp:
+            return name
         model = str(p.model or '').strip()
         return f"{name} · {model}" if model else name
 
@@ -543,9 +600,14 @@ class _AiSettingsPage(QWidget):
         if not pid or pid not in self.settings.providers:
             return
         existing = self._provider_drafts.get(pid, {})
+        provider = self.settings.providers[pid]
         key_text = self.key.text()
         vkey_text = self.vision_key.text()
-        self._provider_drafts[pid] = {
+        draft = {
+            "kind": str(self.provider_kind.currentData() or existing.get("kind", provider.kind)),
+            "acp": existing.get(
+                "acp", provider.acp.to_dict() if provider.acp is not None else {}
+            ),
             "name": self.name.text().strip(),
             "base_url": self.url.text().strip(),
             "model": self.model.text().strip(),
@@ -563,6 +625,8 @@ class _AiSettingsPage(QWidget):
             "thinking": str(self.thinking_mode.currentData() or "auto"),
             "reasoning_effort": str(self.reasoning_effort.currentData() or "high"),
         }
+        self.acp_section.capture_to_draft(draft)
+        self._provider_drafts[pid] = draft
 
     def _load_provider_ui(self, provider_id: str) -> None:
         p = self.settings.providers.get(provider_id)
@@ -570,21 +634,31 @@ class _AiSettingsPage(QWidget):
             return
         draft = self._provider_drafts.get(provider_id, {})
         self.settings.active_provider = provider_id
-        self.name.setText(draft.get("name") if draft.get("name") is not None else p.name)
-        self.url.setText(draft.get("base_url") if draft.get("base_url") is not None else p.base_url)
-        self.model.setText(draft.get("model") if draft.get("model") is not None else p.model)
-        self.key.clear()
-        self.timeout.setValue(int(draft.get("timeout", p.timeout)))
-        self.temperature.setValue(float(draft.get("temperature", p.temperature)))
-        self.tokens.setValue(int(draft.get("max_tokens", p.max_tokens)))
-        self.vision_model.setText(draft.get("vision_model", p.vision_model))
-        self.vision_same.setChecked(bool(draft.get("vision_same_as_chat", p.vision_same_as_chat)))
-        self.vision_url.setText(draft.get("vision_base_url", p.vision_base_url))
-        self.vision_key.clear()
-        self.skip_ssl.setChecked(not bool(draft.get("verify_ssl", p.verify_ssl)))
-        self.thinking_mode.setCurrentData(draft.get("thinking", p.thinking))
-        self.reasoning_effort.setCurrentData(draft.get("reasoning_effort", p.reasoning_effort))
-        self._update_thinking_web_visibility()
+        self._loading_provider = True
+        try:
+            self.provider_kind.setCurrentData(draft.get("kind", p.kind))
+            self.acp_section.load_from_draft({
+                "acp": draft.get(
+                    "acp", p.acp.to_dict() if p.acp is not None else {}
+                ),
+            })
+            self.name.setText(draft.get("name") if draft.get("name") is not None else p.name)
+            self.url.setText(draft.get("base_url") if draft.get("base_url") is not None else p.base_url)
+            self.model.setText(draft.get("model") if draft.get("model") is not None else p.model)
+            self.key.clear()
+            self.timeout.setValue(int(draft.get("timeout", p.timeout)))
+            self.temperature.setValue(float(draft.get("temperature", p.temperature)))
+            self.tokens.setValue(int(draft.get("max_tokens", p.max_tokens)))
+            self.vision_model.setText(draft.get("vision_model", p.vision_model))
+            self.vision_same.setChecked(bool(draft.get("vision_same_as_chat", p.vision_same_as_chat)))
+            self.vision_url.setText(draft.get("vision_base_url", p.vision_base_url))
+            self.vision_key.clear()
+            self.skip_ssl.setChecked(not bool(draft.get("verify_ssl", p.verify_ssl)))
+            self.thinking_mode.setCurrentData(draft.get("thinking", p.thinking))
+            self.reasoning_effort.setCurrentData(draft.get("reasoning_effort", p.reasoning_effort))
+        finally:
+            self._loading_provider = False
+        self._update_provider_kind_visibility()
         self._update_provider_buttons()
 
     def _on_provider_changed(self, _index: int = -1) -> None:
@@ -606,6 +680,11 @@ class _AiSettingsPage(QWidget):
     def _add_provider(self) -> None:
         self._capture_current_draft()
         base = self.settings.active_config
+        current_draft = self._provider_drafts.get(base.provider_id, {})
+        kind = str(current_draft.get("kind", base.kind) or "openai")
+        acp_raw = current_draft.get(
+            "acp", base.acp.to_dict() if base.acp is not None else {}
+        )
         new_id = self._new_provider_id()
         new = self._provider_config_type(
             new_id,
@@ -624,9 +703,13 @@ class _AiSettingsPage(QWidget):
             verify_ssl=base.verify_ssl,
             thinking=base.thinking,
             reasoning_effort=base.reasoning_effort,
+            kind=kind,
+            acp=AcpAgentConfig.from_dict(acp_raw) if kind == "acp" else None,
         )
         self.settings.providers[new_id] = new
         self._provider_drafts[new_id] = {
+            "kind": new.kind,
+            "acp": new.acp.to_dict() if new.acp is not None else {},
             "name": new.name,
             "base_url": new.base_url,
             "model": new.model,
@@ -676,11 +759,29 @@ class _AiSettingsPage(QWidget):
     def _update_provider_buttons(self) -> None:
         self.delete_provider_btn.setEnabled(len(self.settings.providers) > 1)
 
+    def _auto_detect_acp_providers(self) -> None:
+        from .acp.presets import detect_builtin_acp_providers
+
+        self._capture_current_draft()
+        for provider_id, detected in detect_builtin_acp_providers().items():
+            if provider_id in self.settings.providers:
+                continue
+            self.settings.providers[provider_id] = detected
+            self.provider_combo.addItem(self._provider_label(detected), provider_id)
+        self.settings.attach_runtime()
+        self._update_provider_buttons()
+
     def _apply_draft_to_provider(self, provider_id: str) -> None:
         p = self.settings.providers.get(provider_id)
         draft = self._provider_drafts.get(provider_id)
         if p is None or not draft:
             return
+        p.kind = str(draft.get("kind", p.kind) or "openai")
+        p.acp = (
+            AcpAgentConfig.from_dict(draft.get("acp"))
+            if p.kind == "acp"
+            else None
+        )
         if draft.get("name"):
             p.name = draft["name"]
         p.base_url = draft.get("base_url") or p.base_url
@@ -726,6 +827,22 @@ class _AiSettingsPage(QWidget):
 
     def provisional_config(self):
         provider = self.settings.active_config
+        kind = str(self.provider_kind.currentData() or provider.kind)
+        existing = self._provider_drafts.get(provider.provider_id, {})
+        acp_draft = {
+            "acp": existing.get(
+                "acp", provider.acp.to_dict() if provider.acp is not None else {}
+            ),
+        }
+        self.acp_section.capture_to_draft(acp_draft)
+        api_key = ""
+        if kind != "acp":
+            # 表单未填时回退钥匙串：凭据默认存系统钥匙串，直接读 api_key 为空
+            api_key = (
+                self.key.text()
+                or provider.api_key
+                or self._secret_store_type().get(provider.api_key_ref)
+            )
         return self._provider_config_type(
             provider.provider_id,
             self.name.text().strip() or provider.name,
@@ -733,14 +850,15 @@ class _AiSettingsPage(QWidget):
             provider.chat_path,
             self.model.text().strip(),
             provider.api_key_ref,
-            # 表单未填时回退钥匙串：凭据默认存系统钥匙串，直接读 api_key 为空
-            self.key.text() or provider.api_key or self._secret_store_type().get(provider.api_key_ref),
+            api_key,
             float(self.timeout.value()),
             float(self.temperature.value()),
             int(self.tokens.value()),
             verify_ssl=not self.skip_ssl.isChecked(),
             thinking=str(self.thinking_mode.currentData() or "auto"),
             reasoning_effort=str(self.reasoning_effort.currentData() or "high"),
+            kind=kind,
+            acp=AcpAgentConfig.from_dict(acp_draft["acp"]) if kind == "acp" else None,
         )
 
     def _run_test(self) -> None:

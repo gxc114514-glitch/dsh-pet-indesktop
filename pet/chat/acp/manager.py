@@ -205,10 +205,14 @@ class AcpManager:
         client = AcpClient(acp_cfg, ws)
         try:
             client.start()
+            meta, _, _ = client.ensure_session()
             name = client.agent_name or config.name or acp_cfg.command
             ver = client.agent_version
             label = f"{name} {ver}".strip()
-            return (True, f"连接成功：{label}")
+            return (
+                True,
+                f"连接成功：{label}；{len(meta.modes)} 个模式，{len(meta.models)} 个模型",
+            )
         except AcpError as exc:
             msg = str(exc) or "ACP 连接失败"
             if exc.stderr_tail and exc.stderr_tail.strip():

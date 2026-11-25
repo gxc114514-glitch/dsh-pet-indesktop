@@ -63,8 +63,11 @@ def build_browser_headers(extra: dict | None = None) -> dict[str, str]:
 
 
 def test_connection(config, timeout: float = 10.0):
-    """发送一个最小的非流式请求验证端点连通性（含 TLS 校验）。
-    返回 (ok: bool, message: str)，供设置界面"测试连接"使用，不写入任何状态。"""
+    """验证当前 Provider；ACP 走 stdio 握手，OpenAI 行为保持不变。"""
+    if getattr(config, "is_acp", False):
+        from .acp.manager import get_acp_manager
+
+        return get_acp_manager().probe_connection(config)
     try:
         endpoint = normalize_chat_endpoint(config.base_url, config.chat_path)
         payload = {'model': config.model, 'messages': [{'role': 'user', 'content': 'ping'}], 'max_tokens': 1, 'stream': False}

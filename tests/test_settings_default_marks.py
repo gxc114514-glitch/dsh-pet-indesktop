@@ -54,8 +54,10 @@ _SUPPORTED_TYPES = (ToggleSwitch, ModernSelect, BrowserSpinBox, QLineEdit)
 #: 现状文档化：新增这类行会让覆盖率用例变红，逼一次显式归类（不是静默漏掉）。
 NO_DEFAULT_ROWS = frozenset({
     # AI 服务商逐条目字段：每个服务商一套值，没有单一默认值可比
-    "provider_name", "api_url", "model", "api_key", "timeout", "max_tokens", "skip_ssl",
+    "provider_name", "provider_kind", "api_url", "model", "api_key", "timeout", "max_tokens", "skip_ssl",
     "vision_same", "vision_model", "vision_url", "vision_key",
+    "acp_preset", "acp_command", "acp_args", "acp_default_cwd", "acp_tone_enabled",
+    "acp_idle_timeout",
     # 深度思考开关/强度也是逐服务商字段（ProviderConfig.thinking/reasoning_effort）
     "thinking_mode", "reasoning_effort",
     # 搜索 API Key 是凭据字段（优先系统钥匙串），没有可比默认值
